@@ -52,6 +52,7 @@ const getVisibleSteps = (status: any) => {
           toast.success("Video processed successfully! Redirecting to chat...");
           
           // Redirect to chat page after a brief delay
+          localStorage.setItem("videoUrl",response.data.video_url)
           setTimeout(() => {
             router.push(`/chat/${sessionId}`);
           }, 1500);
