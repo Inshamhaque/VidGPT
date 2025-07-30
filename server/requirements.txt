@@ -1,0 +1,18 @@
+# Core FastAPI
+fastapi
+uvicorn[standard]
+python-multipart
+
+# VideoDB and AI
+videodb
+openai
+llama-index
+llama-index-llms-openai
+llama-index-embeddings-openai
+
+# AWS S3 (optional)
+boto3
+
+# Utilities
+python-dotenv
+pydantic
