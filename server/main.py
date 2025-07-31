@@ -18,6 +18,8 @@ import logging
 from typing import List, Optional
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from tempfile import NamedTemporaryFile
+import openai
 
 load_dotenv()
 
@@ -406,6 +408,27 @@ async def get_session_info(session_id: str):
         "has_transcript": bool(session.transcript_text),
         "has_index": bool(session.llama_index)
     }
+
+# whisper api endpoint
+@app.post("/whisper")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Transcribe audio using Whisper (OpenAI)"""
+    try:
+        # Save audio file temporarily
+        with NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+            contents = await file.read()
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        # Transcribe using OpenAI Whisper API
+        with open(tmp_path, "rb") as audio_file:
+            transcript = openai.Audio.transcribe("whisper-1", audio_file)
+
+        return {"transcription": transcript["text"]}
+    
+    except Exception as e:
+        logger.error(f"Whisper transcription failed: {e}")
+        raise HTTPException(status_code=500, detail="Transcription failed")
 
 if __name__ == "__main__":
     import uvicorn
