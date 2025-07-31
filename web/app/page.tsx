@@ -267,24 +267,7 @@ const getVisibleSteps = (status: any) => {
             </div>
           </div>
 
-          {/* Feature Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-16 max-w-4xl mx-auto">
-            <div className="p-6 rounded-xl bg-gray-900/80 backdrop-blur-sm border border-gray-800 hover:bg-gray-800/80 transition-all duration-300 hover:scale-105">
-              <div className="text-3xl mb-3">🎥</div>
-              <h3 className="text-lg font-semibold text-white mb-2">Any Video Format</h3>
-              <p className="text-gray-400 text-sm">Support for YouTube links and direct file uploads</p>
-            </div>
-            <div className="p-6 rounded-xl bg-gray-900/80 backdrop-blur-sm border border-gray-800 hover:bg-gray-800/80 transition-all duration-300 hover:scale-105">
-              <div className="text-3xl mb-3">🤖</div>
-              <h3 className="text-lg font-semibold text-white mb-2">AI-Powered Chat</h3>
-              <p className="text-gray-400 text-sm">Ask questions and get intelligent responses about your video</p>
-            </div>
-            <div className="p-6 rounded-xl bg-gray-900/80 backdrop-blur-sm border border-gray-800 hover:bg-gray-800/80 transition-all duration-300 hover:scale-105">
-              <div className="text-3xl mb-3">⚡</div>
-              <h3 className="text-lg font-semibold text-white mb-2">Lightning Fast</h3>
-              <p className="text-gray-400 text-sm">Quick processing and instant responses</p>
-            </div>
-          </div>
+          
         </div>
       </div>
 
