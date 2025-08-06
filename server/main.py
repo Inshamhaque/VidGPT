@@ -427,25 +427,214 @@ async def get_transcript(session_id):
     }
 
 
+# Enhanced chapter generation endpoint using VideoDB's spoken word indexing
+
 @app.post("/chapter/{session_id}")
 async def get_chapters(session_id: str):
-    """Get chapter-wise summary using the transcript"""
+    """Get chapter-wise summary using VideoDB's spoken word indexing for accurate timestamps"""
     session = video_sessions.get(session_id)
-    # if not session:
-    #     raise HTTPException(status_code=404, detail="Session not found")
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    # if not session.transcript_text:
-    #     raise HTTPException(status_code=400, detail="Transcript not yet available")
+    if not session.processing_status['processing_complete']:
+        raise HTTPException(status_code=400, detail="Video processing not complete yet")
 
+    if not session.processing_status['spoken_words_indexed']:
+        # Fallback to basic LLM-based chapters if spoken words indexing failed
+        return await get_chapters_fallback(session_id, session)
+
+    try:
+        # Step 1: Use LLM to identify key topics/themes from transcript
+        topics = await identify_chapter_topics(session.transcript_text)
+        
+        # Step 2: Use VideoDB's spoken word search to find precise timestamps for each topic
+        chapters_with_timestamps = await find_precise_timestamps(session, topics)
+        
+        # Step 3: Generate final chapter summaries with accurate timing
+        final_chapters = await generate_chapter_summaries(session, chapters_with_timestamps)
+        
+        return {
+            "session_id": session_id,
+            "chapters": final_chapters,
+            "method": "videodb_enhanced"
+        }
+
+    except Exception as e:
+        logger.error(f"Enhanced chapter generation failed: {e}")
+        # Fallback to basic method
+        return await get_chapters_fallback(session_id, session)
+
+
+async def identify_chapter_topics(transcript_text: str):
+    """Use LLM to identify key topics and their keywords for searching"""
     from openai import OpenAI
     import json
-    import re
-
+    
     openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
+    
     prompt = f"""
-You are a helpful AI assistant.
+Analyze this video transcript and identify 4-8 main topics/themes that would make good chapter divisions.
 
+For each topic, provide:
+1. A descriptive title
+2. 3-5 key phrases or keywords that exactly match the transcript as we have to search through the index of spoken words
+3. A brief description
+
+Format as JSON:
+[
+  {{
+    "title": "Introduction to Topic X",
+    "keywords": ["keyword1", "specific phrase", "technical term"],
+    "description": "Brief description of what this section covers"
+  }},
+  ...
+]
+
+Transcript:
+\"\"\"
+{transcript_text[:4000]}...
+\"\"\"
+"""
+    
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an expert at analyzing video content and creating chapter structures."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.3
+    )
+    
+    raw_output = response.choices[0].message.content.strip()
+    if raw_output.startswith("```"):
+        raw_output = re.sub(r"^```(?:json)?", "", raw_output)
+        raw_output = raw_output.rstrip("```").strip()
+    
+    return json.loads(raw_output)
+
+
+async def find_precise_timestamps(session: VideoSession, topics: List[dict]):
+    """Use VideoDB's spoken word search to find precise timestamps for each topic"""
+    chapters_with_timestamps = []
+    
+    for i, topic in enumerate(topics):
+        best_timestamp = None
+        best_score = 0
+        
+        # Search for each keyword and find the earliest occurrence
+        for keyword in topic["keywords"]:
+            try:
+                # Use VideoDB's semantic search on spoken words
+                result = session.video.search(
+                    query=keyword,
+                    search_type=SearchType.semantic,
+                    index_type=IndexType.spoken_word
+                )
+                
+                if result.shots and len(result.shots) > 0:
+                    # Get the first occurrence of this keyword
+                    shot = result.shots[0]
+                    
+                    # If this is earlier than our current best, or we don't have one yet
+                    if best_timestamp is None or shot.start < best_timestamp:
+                        best_timestamp = shot.start
+                        best_score = shot.search_score if hasattr(shot, 'search_score') else 1.0
+                        
+            except Exception as e:
+                logger.warning(f"Failed to search for keyword '{keyword}': {e}")
+                continue
+        
+        # If we couldn't find timestamps, estimate based on position
+        if best_timestamp is None:
+            # Estimate based on chapter position (fallback)
+            estimated_duration = session.video.length if hasattr(session.video, 'length') else 1800  # 30 min default
+            best_timestamp = (i / len(topics)) * estimated_duration
+        
+        chapters_with_timestamps.append({
+            "title": topic["title"],
+            "description": topic["description"],
+            "start_time": best_timestamp,
+            "keywords": topic["keywords"]
+        })
+    
+    # Sort chapters by start time
+    chapters_with_timestamps.sort(key=lambda x: x["start_time"])
+    
+    return chapters_with_timestamps
+
+
+async def generate_chapter_summaries(session: VideoSession, chapters_with_timestamps: List[dict]):
+    """Generate final chapter summaries with precise timestamps"""
+    final_chapters = []
+    
+    for i, chapter in enumerate(chapters_with_timestamps):
+        start_time = chapter["start_time"]
+        
+        # Determine end time (start of next chapter or end of video)
+        if i < len(chapters_with_timestamps) - 1:
+            end_time = chapters_with_timestamps[i + 1]["start_time"]
+        else:
+            # Last chapter - estimate end time or use video length
+            end_time = start_time + 300  # Default 5 minutes for last chapter
+            if hasattr(session.video, 'length'):
+                end_time = min(end_time, session.video.length)
+        
+        # Format timestamps
+        start_formatted = seconds_to_mmss(start_time)
+        
+        # Get content for this time range using VideoDB search
+        chapter_content = await get_chapter_content(session, chapter["keywords"], start_time, end_time)
+        
+        final_chapters.append({
+            "title": chapter["title"],
+            "start_time": start_formatted,
+            "start_seconds": start_time,
+            "description": chapter_content if chapter_content else chapter["description"],
+            "duration": int(end_time - start_time)
+        })
+    
+    return final_chapters
+
+
+async def get_chapter_content(session: VideoSession, keywords: List[str], start_time: float, end_time: float):
+    """Extract relevant content for a chapter using VideoDB search"""
+    try:
+        # Search for content in this time range
+        relevant_content = []
+        
+        for keyword in keywords[:2]:  # Limit to top 2 keywords to avoid too many searches
+            result = session.video.search(
+                query=keyword,
+                search_type=SearchType.semantic,
+                index_type=IndexType.spoken_word
+            )
+            
+            if result.shots:
+                for shot in result.shots:
+                    # Only include shots within our chapter time range
+                    if start_time <= shot.start <= end_time:
+                        relevant_content.append(shot.text if hasattr(shot, 'text') else keyword)
+        
+        if relevant_content:
+            # Combine and summarize the content
+            combined_content = " ".join(relevant_content[:3])  # Limit length
+            return f"Covers {', '.join(keywords[:3])} and related topics. {combined_content[:100]}..."
+        
+        return None
+        
+    except Exception as e:
+        logger.warning(f"Failed to get chapter content: {e}")
+        return None
+
+
+async def get_chapters_fallback(session_id: str, session: VideoSession):
+    """Fallback method using basic LLM analysis (original implementation)"""
+    from openai import OpenAI
+    import json
+    
+    openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    
+    prompt = f"""
 You are given the full transcript of a video below. Your task is to divide the video into 4–8 coherent chapters.
 
 For each chapter, provide:
@@ -468,7 +657,7 @@ Transcript:
 {session.transcript_text}
 \"\"\"
     """.strip()
-
+    
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
@@ -478,25 +667,82 @@ Transcript:
             ],
             temperature=0.5
         )
-
+        
         raw_output = response.choices[0].message.content.strip()
-
-        # If markdown formatting like ```json is included
+        
         if raw_output.startswith("```"):
             raw_output = re.sub(r"^```(?:json)?", "", raw_output)
             raw_output = raw_output.rstrip("```").strip()
-
+        
         chapters = json.loads(raw_output)
-
+        
         return {
             "session_id": session_id,
-            "chapters": chapters
+            "chapters": chapters,
+            "method": "llm_fallback"
         }
-
+        
     except Exception as e:
-        logger.error(f"Chapter generation failed: {e}")
+        logger.error(f"Fallback chapter generation failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate chapters")
 
+
+def seconds_to_mmss(seconds: float) -> str:
+    """Convert seconds to MM:SS format"""
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes:02d}:{secs:02d}"
+
+
+# Additional endpoint to get chapters with video clips
+@app.post("/chapter-clips/{session_id}")
+async def get_chapters_with_clips(session_id: str):
+    """Get chapters and generate video clips for each chapter"""
+    session = video_sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not session.processing_status['processing_complete']:
+        raise HTTPException(status_code=400, detail="Video processing not complete yet")
+
+    try:
+        # Get enhanced chapters first
+        chapters_response = await get_chapters(session_id)
+        chapters = chapters_response["chapters"]
+        
+        # Generate clips for each chapter (if VideoDB supports it)
+        chapters_with_clips = []
+        
+        for chapter in chapters:
+            try:
+                if "start_seconds" in chapter:
+                    start_time = chapter["start_seconds"]
+                    duration = chapter.get("duration", 60)  # Default 1 minute
+                    
+                    # Generate clip (if VideoDB supports timeline/clip generation)
+                    # clip_url = session.video.generate_clip(start=start_time, duration=duration)
+                    
+                    chapter_with_clip = chapter.copy()
+                    # chapter_with_clip["clip_url"] = clip_url
+                    chapter_with_clip["timestamp_url"] = f"{session.video_url}#t={int(start_time)}"
+                    
+                    chapters_with_clips.append(chapter_with_clip)
+                else:
+                    chapters_with_clips.append(chapter)
+                    
+            except Exception as e:
+                logger.warning(f"Failed to generate clip for chapter: {e}")
+                chapters_with_clips.append(chapter)
+        
+        return {
+            "session_id": session_id,
+            "chapters": chapters_with_clips,
+            "method": chapters_response.get("method", "enhanced")
+        }
+        
+    except Exception as e:
+        logger.error(f"Chapter clips generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate chapter clips")
 
 @app.post("/whisper")
 async def transcribe_audio(file: UploadFile = File(...)):

@@ -5,6 +5,8 @@ import axios from "axios";
 import { ToastContainer, toast } from "react-toastify";
 import { MultiStepLoader } from "./components/ui/multi-step-loader";
 import { useRouter } from "next/navigation";
+import { Moon, Sun } from "lucide-react";
+import Navbar from "./components/Navbar";
 
 export default function Home() {
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8000";
@@ -181,16 +183,8 @@ const getVisibleSteps = (status: any) => {
         <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-gray-500/5 rounded-full blur-3xl"></div>
         
         {/* Navbar */}
-        <nav className="relative z-10 border-b border-gray-800 bg-black/80 backdrop-blur-xl px-6 py-4">
-          <div className="flex items-center justify-between max-w-6xl mx-auto">
-            <h1 className="text-2xl font-bold text-white font-mono tracking-wider">
-              VIDGPT
-            </h1>
-            <button className="p-2 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition-all duration-300">
-              Toggle Theme
-            </button>
-          </div>
-        </nav>
+
+        <Navbar />
 
         {/* Hero Section */}
         <div className="relative z-10 flex flex-col items-center justify-center px-6 py-20">
