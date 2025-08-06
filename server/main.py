@@ -22,24 +22,19 @@ from tempfile import NamedTemporaryFile
 from openai import OpenAI as OpenAIClient
 
 load_dotenv()
-
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI
-app = FastAPI(title="Video Chat API", description="Backend API for video chat functionality")
+app = FastAPI(title="Video Chat API", description="Backend")
 
-# CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000",'0.0.0.0'],  # Add your Next.js dev server
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000",'0.0.0.0'],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize AI models
 Settings.llm = OpenAI(
     model="gpt-4o-mini",
     api_key=os.environ["OPENAI_API_KEY"]
@@ -49,11 +44,9 @@ Settings.embed_model = OpenAIEmbedding(
     api_key=os.environ["OPENAI_API_KEY"]
 )
 
-# Initialize VideoDB
 conn = videodb.connect(api_key=os.environ["VIDEODB_API_KEY"])
 coll = conn.get_collection()
 
-# Initialize S3
 s3_client = boto3.client(
     's3',
     aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
@@ -61,10 +54,8 @@ s3_client = boto3.client(
     region_name=os.environ.get("AWS_REGION", "us-east-1")
 )
 
-# In-memory storage for video sessions
 video_sessions = {}
 
-# Pydantic models
 class FileUploadResponse(BaseModel):
     file_url: str
     session_id: str
@@ -264,7 +255,6 @@ class VideoSession:
         return timestamps
 
 
-# Pydantic model for URL upload
 class URLUpload(BaseModel):
     url: str
 
@@ -319,20 +309,16 @@ async def upload_file(file: UploadFile = File(...)):
             }
         )
 
-        # Generate S3 URL
         file_url = f"https://{bucket_name}.s3.{os.environ.get('AWS_REGION', 'us-east-1')}.amazonaws.com/{unique_filename}"
 
         logger.info(f"📤 Uploaded file to S3: {file_url}")
 
-        # Upload to VideoDB
         video = coll.upload(url=file_url)
 
-        # Create session and start processing
         session_id = str(uuid.uuid4())
         session = VideoSession(video, file_url)
         video_sessions[session_id] = session
 
-        # Start background processing
         asyncio.create_task(session.process_video_async())
 
         logger.info(f"✅ Session created: {session_id}")
@@ -348,7 +334,6 @@ async def upload_file(file: UploadFile = File(...)):
         logger.error(f"❌ Error uploading file: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
-# New endpoint to check processing status
 @app.get("/status/{session_id}")
 async def get_processing_status(session_id: str):
     """Check if video processing is complete"""
@@ -427,8 +412,6 @@ async def get_transcript(session_id):
     }
 
 
-# Enhanced chapter generation endpoint using VideoDB's spoken word indexing
-
 @app.post("/chapter/{session_id}")
 async def get_chapters(session_id: str):
     """Get chapter-wise summary using VideoDB's spoken word indexing for accurate timestamps"""
@@ -440,17 +423,12 @@ async def get_chapters(session_id: str):
         raise HTTPException(status_code=400, detail="Video processing not complete yet")
 
     if not session.processing_status['spoken_words_indexed']:
-        # Fallback to basic LLM-based chapters if spoken words indexing failed
         return await get_chapters_fallback(session_id, session)
 
     try:
-        # Step 1: Use LLM to identify key topics/themes from transcript
         topics = await identify_chapter_topics(session.transcript_text)
         
-        # Step 2: Use VideoDB's spoken word search to find precise timestamps for each topic
         chapters_with_timestamps = await find_precise_timestamps(session, topics)
-        
-        # Step 3: Generate final chapter summaries with accurate timing
         final_chapters = await generate_chapter_summaries(session, chapters_with_timestamps)
         
         return {
@@ -461,7 +439,6 @@ async def get_chapters(session_id: str):
 
     except Exception as e:
         logger.error(f"Enhanced chapter generation failed: {e}")
-        # Fallback to basic method
         return await get_chapters_fallback(session_id, session)
 
 
@@ -520,11 +497,10 @@ async def find_precise_timestamps(session: VideoSession, topics: List[dict]):
     for i, topic in enumerate(topics):
         best_timestamp = None
         best_score = 0
-        
-        # Search for each keyword and find the earliest occurrence
+
         for keyword in topic["keywords"]:
             try:
-                # Use VideoDB's semantic search on spoken words
+                # video db semantic searching
                 result = session.video.search(
                     query=keyword,
                     search_type=SearchType.semantic,
@@ -532,10 +508,9 @@ async def find_precise_timestamps(session: VideoSession, topics: List[dict]):
                 )
                 
                 if result.shots and len(result.shots) > 0:
-                    # Get the first occurrence of this keyword
+                    # first occurrence
                     shot = result.shots[0]
                     
-                    # If this is earlier than our current best, or we don't have one yet
                     if best_timestamp is None or shot.start < best_timestamp:
                         best_timestamp = shot.start
                         best_score = shot.search_score if hasattr(shot, 'search_score') else 1.0
@@ -543,10 +518,8 @@ async def find_precise_timestamps(session: VideoSession, topics: List[dict]):
             except Exception as e:
                 logger.warning(f"Failed to search for keyword '{keyword}': {e}")
                 continue
-        
-        # If we couldn't find timestamps, estimate based on position
+
         if best_timestamp is None:
-            # Estimate based on chapter position (fallback)
             estimated_duration = session.video.length if hasattr(session.video, 'length') else 1800  # 30 min default
             best_timestamp = (i / len(topics)) * estimated_duration
         
@@ -557,7 +530,6 @@ async def find_precise_timestamps(session: VideoSession, topics: List[dict]):
             "keywords": topic["keywords"]
         })
     
-    # Sort chapters by start time
     chapters_with_timestamps.sort(key=lambda x: x["start_time"])
     
     return chapters_with_timestamps
