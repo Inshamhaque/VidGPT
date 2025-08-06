@@ -744,6 +744,11 @@ async def transcribe_audio(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Whisper transcription failed: {e}")
         raise HTTPException(status_code=500, detail="Transcription failed")
+    
+@app.get("/health")
+def get_health_get():
+    return {"status": "ok"}
+
 
 if __name__ == "__main__":
     import uvicorn
